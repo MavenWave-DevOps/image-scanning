@@ -1,0 +1,50 @@
+steps:
+# Install dependencies
+  - name: python
+    id: 'Installing dependencies'
+    entrypoint: pip
+    args: ["install", "-r", "requirements.txt", "--user"]
+
+# Docker Build
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'Building image'
+    args: ['build', '-t', 
+           'us-central1-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_IMAGE_NAME}:${_VERSION}', '.']
+
+# Scanning the image
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: 'scan'
+    entrypoint: /bin/bash
+    args:
+    - -c
+    - |
+       gcloud artifacts docker images scan us-central1-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_IMAGE_NAME}:${_VERSION} \
+       --format='value(response.scan)' > /workspace/scan_id.txt
+
+# Checking the severity
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: 'severity check'
+    entrypoint: /bin/bash
+    args:
+    - -c
+    - |
+       gcloud artifacts docker images list-vulnerabilities $(cat /workspace/scan_id.txt) \
+       --format='value(vulnerability.effectiveSeverity)' | if grep -Fxq $_SEVERITY; \
+       then echo 'Failed vulnerability check' && exit 1; else exit 0; fi
+
+# Docker push to Google Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'Pushing the image'
+    args: ['push',  'us-central1-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_IMAGE_NAME}:${_VERSION}']
+
+# Deploy to Cloud Run
+  - name: google/cloud-sdk
+    id: 'Deploying image'
+    args: ['gcloud', 'run', 'deploy', 'flask', 
+           '--image=us-central1-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_IMAGE_NAME}:${_VERSION}', 
+           '--region', 'us-central1', '--platform', 'managed', '--port=5000',
+           '--allow-unauthenticated']
+
+# Store images in Google Artifacte Registry 
+images:
+  - us-central1-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_IMAGE_NAME}:${_VERSION}
